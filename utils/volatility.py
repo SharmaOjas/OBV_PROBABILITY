@@ -39,10 +39,6 @@ def calc_volume_weighted_garch(
         return np.array([])
 
     volatilities = np.full(n, np.nan)
-    avg_volume = np.nanmean(np.maximum(volumes, 0))
-    if avg_volume <= 0:
-        avg_volume = 1.0
-    norm_vols = np.maximum(volumes, 0) / avg_volume
 
     init_slice = log_returns[:min(window, n)]
     valid_init = init_slice[np.isfinite(init_slice)]
@@ -52,69 +48,160 @@ def calc_volume_weighted_garch(
     prev_variance = uncond_var
     prev_sq_return = uncond_var
 
+    print(f"[GARCH] n={n}, window={window}")
+    print(f"[GARCH] log_returns[:5]={log_returns[:5]}")
+    print(f"[GARCH] valid_init[:5]={valid_init[:5]}")
+    print(f"[GARCH] uncond_var={uncond_var:.8f}")
+    print(f"[GARCH] prev_variance={prev_variance:.8f}, prev_sq_return={prev_sq_return:.8f}")
+
     for i in range(n):
+        recent_vols = np.maximum(volumes[max(0, i - 199):i + 1], 0)
+        avg_volume = np.nanmean(recent_vols)
+        if not np.isfinite(avg_volume) or avg_volume <= 0:
+            avg_volume = 1.0
+
+        cur_vol = max(volumes[i], 0) if np.isfinite(volumes[i]) else 0.0
+        vol_ratio = np.clip(cur_vol / avg_volume, 0.1, 10.0)
+
         cur_ret = log_returns[i] if np.isfinite(log_returns[i]) else 0.0
         sq_ret = cur_ret ** 2
-        vol_ratio = np.clip(norm_vols[i] if np.isfinite(norm_vols[i]) else 1.0, 0.1, 10.0)
         core_var = omega + alpha * prev_sq_return + beta * prev_variance
         vol_term = np.tanh(gamma * np.log(vol_ratio))
         new_var = core_var * (1.0 + vol_term)
         if not np.isfinite(new_var) or new_var < 0:
             new_var = prev_variance
         new_var = np.clip(new_var, 0.0001, 1.0)
-        volatilities[i] = np.sqrt(new_var) * np.sqrt(252) * 100.0
+        volatilities[i] = np.sqrt(new_var) * np.sqrt(252)
+
+        if i < 5:
+            print(f"[GARCH] i={i}")
+            print(f"  avg_volume={avg_volume:.4f}, cur_vol={cur_vol:.4f}, vol_ratio={vol_ratio:.4f}")
+            print(f"  cur_ret={cur_ret:.8f}, sq_ret={sq_ret:.8f}")
+            print(f"  vol_term={vol_term:.6f}, core_var={core_var:.8f}")
+            print(f"  new_var (pre-clip)={core_var * (1.0 + vol_term):.8f}")
+            print(f"  new_var (post-clip)={new_var:.8f}")
+            print(f"  volatility={volatilities[i]:.4f}")
+
         prev_variance = new_var
         prev_sq_return = sq_ret
 
+    print(f"[GARCH] volatilities[:5]={volatilities[:5]}")
+    print(f"[GARCH] volatilities[-5:]={volatilities[-5:]}")
     return volatilities
 
+def calc_yang_zhang(open_, high, low, close, window=10):
 
-def calc_yang_zhang_vol(open_, high, low, close, volumes=None, window=10):
+    open_ = np.asarray(open_, dtype=float)
+    high = np.asarray(high, dtype=float)
+    low = np.asarray(low, dtype=float)
+    close = np.asarray(close, dtype=float)
+
     n = len(close)
-    if n < window:
-        return np.full(n, np.nan)
+    result = np.full(n, np.nan)
 
-    open_ = np.array(open_, dtype=float)
-    high = np.array(high, dtype=float)
-    low = np.array(low, dtype=float)
-    close = np.array(close, dtype=float)
-
-    log_oc = np.log(close / open_)
-    log_cc = np.log(close / np.roll(close, 1))
-    log_co = np.log(open_ / np.roll(close, 1))
-    log_oh = np.log(high / open_)
-    log_ol = np.log(low / open_)
-    log_cc[0] = np.nan
-    log_co[0] = np.nan
-
-    rs = log_oh * (log_oh - log_oc) + log_ol * (log_ol - log_oc)
     k = 0.34 / (1.34 + (window + 1) / (window - 1))
 
-    yz_vol = np.full(n, np.nan)
+    for i in range(window, n):
+
+        vo = 0.0
+        vc = 0.0
+        vrs = 0.0
+
+        # Rolling window
+        for j in range(i - window + 1, i + 1):
+
+            if j == 0:
+                continue
+
+            op = open_[j]
+            hi = high[j]
+            lo = low[j]
+            cl = close[j]
+            cl_prior = close[j - 1]
+
+            # Overnight second moment
+            no = np.log(op / cl_prior)
+            vo += no * no
+
+            # Open → Close second moment
+            nc = np.log(cl / op)
+            vc += nc * nc
+
+            # Conditional Rogers-Satchell (JS filtered)
+            if hi > max(op, cl):
+                vrs += np.log(hi / cl) * np.log(hi / op)
+
+            if lo < min(op, cl):
+                vrs += np.log(lo / cl) * np.log(lo / op)
+
+        variance = (
+            vo / window
+            + k * (vc / window)
+            + (1 - k) * (vrs / window)
+        )
+
+        result[i] = np.sqrt(max(variance, 0.0))
+
+    return result
+
+
+# -------------------------------------------------
+# VolFlow: Yang-Zhang × Order Flow Pressure
+# -------------------------------------------------
+def calc_yang_zhang_vol(
+    open_,
+    high,
+    low,
+    close,
+    volumes=None,
+    window=10,
+):
+
+    open_ = np.asarray(open_, dtype=float)
+    high = np.asarray(high, dtype=float)
+    low = np.asarray(low, dtype=float)
+    close = np.asarray(close, dtype=float)
+
+    n = len(close)
+
+    yz_vol = calc_yang_zhang(
+        open_, high, low, close, window
+    )
+
+    result = np.full(n, np.nan)
+
     avg_vol = calc_sma(volumes, window) if volumes is not None else None
 
     for i in range(window - 1, n):
-        sl = slice(i - window + 1, i + 1)
-        cc = log_cc[sl][~np.isnan(log_cc[sl])]
-        co = log_co[sl][~np.isnan(log_co[sl])]
-        oc = log_oc[sl][~np.isnan(log_oc[sl])]
-        r = rs[sl][~np.isnan(rs[sl])]
-        if len(cc) < 2:
+
+        base_vol = yz_vol[i]
+        if not np.isfinite(base_vol):
             continue
 
-        yz_var = np.var(co, ddof=1) + k * np.var(oc, ddof=1) + (1 - k) * np.mean(r)
-        base_vol = np.sqrt(max(yz_var, 0)) * np.sqrt(252) * 100.0
-
+        # Flow pressure
         price_move = close[i] - open_[i]
         candle_range = high[i] - low[i]
-        flow_pressure = (price_move / candle_range) if candle_range > 0 else 0.0
-        if volumes is not None and avg_vol is not None and not np.isnan(avg_vol[i]) and avg_vol[i] > 0:
-            flow_pressure *= min(volumes[i] / avg_vol[i], 3.0)
 
-        yz_vol[i] = base_vol * (1.0 + 0.3 * np.tanh(flow_pressure))
+        flow_pressure = 0.0
+        if candle_range > 0:
+            flow_pressure = price_move / candle_range
 
-    return yz_vol
+        # Volume confirmation
+        if (
+            volumes is not None
+            and avg_vol is not None
+            and np.isfinite(avg_vol[i])
+            and avg_vol[i] > 0
+        ):
+            vol_ratio = min(volumes[i] / avg_vol[i], 3.0)
+            flow_pressure *= vol_ratio
 
+        # Nonlinear scaling
+        flow_multiplier = 1.0 + 0.3 * np.tanh(flow_pressure)
+
+        result[i] = base_vol * flow_multiplier * 100
+
+    return result
 
 def compute_volatility(df, method, window=20):
     close = df['Close'].values

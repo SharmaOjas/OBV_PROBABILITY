@@ -143,7 +143,7 @@ def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window):
         params.forEach(p => {{
           if (p.seriesType === 'candlestick') {{
             const v = p.value;
-            html += `<div>O:<b>${{v[0]}}</b> H:<b>${{v[3]}}</b> L:<b>${{v[2]}}</b> C:<b>${{v[1]}}</b></div>`;
+            html += `<div>O:<b>${{v[1]}}</b> H:<b>${{v[4]}}</b> L:<b>${{v[3]}}</b> C:<b>${{v[2]}}</b></div>`;
           }} else if (p.value !== null && p.value !== undefined) {{
             html += `<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${{p.color}};margin-right:5px"></span>${{p.seriesName}}: <b>${{typeof p.value==='number'?p.value.toFixed(2):p.value}}</b></div>`;
           }}
@@ -228,7 +228,8 @@ def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window):
         return html;
       }}
     }},
-    grid: {{ ...sharedGrid }}, xAxis: {{ ...xAxisBase }}, yAxis: {{ ...yAxisBase }},
+    grid: {{ ...sharedGrid }}, xAxis: {{ ...xAxisBase }},
+    yAxis: {{ ...yAxisBase, axisLabel: {{ color:AXIS_LBL, fontSize:10, formatter: v => v.toFixed(3)+'%' }}, boundaryGap: ['10%', '10%'] }},
     dataZoom: [{{ type:'inside', xAxisIndex:0, start:0, end:100 }}],
     series: [
       {{ name:'{vol_label}', type:'line', data:volData, smooth:false, symbol:'none',
