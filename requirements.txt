@@ -1,16 +1,16 @@
 
 
-matplotlib==3.8.4
+matplotlib
 
-requests==2.32.3
+requests
 
-upstox-python-sdk==2.19.0
-groq==1.0.0
+upstox-python-sdk
+groq
 
-streamlit==1.53.1
-altair==5.5.0
-pandas==2.2.3
-numpy==1.26.4
-scipy==1.11.4
+streamlit
+altair
+pandas
+numpy
+scipy
 yfinance
 plotly
