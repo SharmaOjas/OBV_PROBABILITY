@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+
 def calc_log_returns(close: np.ndarray) -> np.ndarray:
     c = np.array(close, dtype=float)
     lr = np.full(len(c), np.nan)
@@ -17,6 +18,17 @@ def calc_pct_change(values: np.ndarray) -> np.ndarray:
         if not np.isnan(v[i - 1]) and v[i - 1] != 0:
             out[i] = (v[i] - v[i - 1]) * 100.0 / v[i - 1]
     return out
+
+
+def calc_sma(arr: np.ndarray, window: int) -> np.ndarray:
+    result = np.full(len(arr), np.nan)
+    for i in range(window - 1, len(arr)):
+        window_vals = arr[i - window + 1:i + 1]
+        valid = window_vals[~np.isnan(window_vals)]
+        if len(valid) > 0:
+            result[i] = np.mean(valid)
+    return result
+
 
 def calc_volume_weighted_garch(
         log_returns, volumes, window=20,
