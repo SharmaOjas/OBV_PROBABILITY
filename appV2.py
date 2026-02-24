@@ -1,4 +1,5 @@
 import streamlit as st
+import joblib
 import upstox_client
 from upstox_client.rest import ApiException
 import pandas as pd
@@ -241,6 +242,13 @@ def map_period_to_dates(period):
 # -------------------------------------------------
 st.set_page_config(layout="wide", page_title="OBV Divergence Master")
 st.title("📊 OBV Divergence Screener (Dual-View)")
+
+
+@st.cache_resource
+def load_model():
+    return joblib.load("divergence_model.pkl")
+
+model = load_model()
 
 
 # -------------------------------------------------
@@ -1132,6 +1140,55 @@ with st.sidebar:
     groq_api_key = st.text_input("Groq API Key", type="password")
 
 # -------------------------------------------------
+# ML Feature Builder (matches training exactly)
+# -------------------------------------------------
+def build_ml_features(df, div):
+    idx = div["P2_Idx"]
+    if idx < 50:
+        return None
+
+    try:
+        df["RSI"] = compute_rsi(df["Close"])
+
+        rsi = df["RSI"].iloc[idx]
+        rsi_slope = df["RSI"].iloc[idx] - df["RSI"].iloc[idx - 3]
+        obv_slope = df["OBV"].iloc[idx] - df["OBV"].iloc[idx - 5]
+
+        ret_5d = df["Close"].pct_change(5).iloc[idx]
+        ret_10d = df["Close"].pct_change(10).iloc[idx]
+
+        volatility = df["Close"].pct_change().rolling(20).std().iloc[idx]
+
+        volume_spike = df["Volume"].iloc[idx] / df["Volume"].rolling(20).mean().iloc[idx]
+
+        sma20 = df["Close"].rolling(20).mean().iloc[idx]
+        sma50 = df["Close"].rolling(50).mean().iloc[idx]
+
+        sma20_dist = (df["Close"].iloc[idx] - sma20) / df["Close"].iloc[idx]
+        sma50_dist = (df["Close"].iloc[idx] - sma50) / df["Close"].iloc[idx]
+
+        div_binary = 1 if div["Type"] == "Bullish" else 0
+
+        features = {
+            "rsi": rsi,
+            "rsi_slope": rsi_slope,
+            "obv_slope": obv_slope,
+            "ret_5d": ret_5d,
+            "ret_10d": ret_10d,
+            "volatility": volatility,
+            "volume_spike": volume_spike,
+            "sma20_dist": sma20_dist,
+            "sma50_dist": sma50_dist,
+            "div_type": div_binary,
+        }
+
+        return pd.DataFrame([features])
+
+    except:
+        return None
+
+
+# -------------------------------------------------
 # Run Screener
 # -------------------------------------------------
 if st.button("🚀 Run Screener"):
@@ -1177,12 +1234,20 @@ if st.button("🚀 Run Screener"):
             last_price = float(df['Close'].iloc[-1]) if not df.empty else np.nan
             name = get_company_name(ticker, instruments_df)
             sig_type = divs[0]['Type'] if divs else ""
+            probability = None
+            if divs:
+                features_df = build_ml_features(df, divs[0])
+                if features_df is not None:
+                    prob = model.predict_proba(features_df)[0][1]
+                    probability = round(prob * 100, 2)
+
             summary_rows.append({
                 "Symbol": ticker, "Name": name,
                 "Price": round(last_price, 2) if not np.isnan(last_price) else None,
                 "Signal": "Yes" if divs else "No", "Type": sig_type,
                 "From": divs[0]['P1_Date'].date() if divs else "",
                 "To": divs[0]['P2_Date'].date() if divs else "",
+                "Probability (%)": probability,
             })
             results_map[ticker] = (df, divs, ph, pl)
 
@@ -1206,6 +1271,10 @@ if st.session_state.get("scan_results"):
     summary_df = pd.DataFrame(summary_rows)
     if "Price" in summary_df.columns:
         summary_df["Price"] = pd.to_numeric(summary_df["Price"], errors="coerce")
+    if "Probability (%)" in summary_df.columns:
+        summary_df["Probability (%)"] = pd.to_numeric(
+            summary_df["Probability (%)"], errors="coerce"
+        )
     for col in ["Symbol", "Name", "Signal", "Type", "From", "To"]:
         if col in summary_df.columns:
             summary_df[col] = summary_df[col].fillna("").astype(str)
@@ -1229,6 +1298,13 @@ if st.session_state.get("scan_results"):
         results_map = st.session_state.get("results_map", {})
         if selected_symbol in results_map:
             df, divs, ph, pl = results_map[selected_symbol]
+
+            selected_row = summary_df[summary_df["Symbol"] == selected_symbol]
+            if not selected_row.empty and "Probability (%)" in summary_df.columns:
+                prob_val = selected_row["Probability (%)"].values[0]
+                if prob_val is not None and not pd.isna(prob_val):
+                    st.metric("ML Success Probability", f"{prob_val}%")
+
             st.subheader(f"{selected_symbol} Chart")
             if chart_style == "Static (Matplotlib)":
                 plot_static_matplotlib(df, divs, ph, pl, selected_symbol, vol_method, vol_window)
