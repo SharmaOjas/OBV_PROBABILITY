@@ -1254,6 +1254,51 @@ if st.button("🚀 Run Screener"):
         st.session_state.scan_results = summary_rows
         st.session_state.results_map = results_map
 
+        # --- Build Date-wise Divergence Summary ---
+        # Fetch Nifty 50 closing data for the same period
+        nifty_close_map = {}
+        try:
+            nifty_ikey = get_instrument_key(instruments_df, "NIFTY 50", is_index=True)
+            if nifty_ikey:
+                nifty_df = fetch_upstox_historical_data(
+                    nifty_ikey, "day", from_date, to_date, upstox_access_token
+                )
+                if not nifty_df.empty:
+                    for ts, row in nifty_df.iterrows():
+                        nifty_close_map[str(ts.date())] = round(float(row['Close']), 2)
+        except Exception:
+            pass
+
+        # Group divergences by completion date (P2_Date)
+        datewise = {}  # date_str -> {bullish: count, bearish: count, stocks: [...]}
+        for ticker, df_stock, divs, ph, pl in results_container:
+            for d in divs:
+                completion_date = str(d['P2_Date'].date()) if hasattr(d['P2_Date'], 'date') else str(d['P2_Date'])[:10]
+                stock_close = round(float(d['P2_Price']), 2)
+                if completion_date not in datewise:
+                    datewise[completion_date] = {'bullish': 0, 'bearish': 0, 'stocks': []}
+                if d['Type'] == 'Bullish':
+                    datewise[completion_date]['bullish'] += 1
+                else:
+                    datewise[completion_date]['bearish'] += 1
+                datewise[completion_date]['stocks'].append({
+                    'Symbol': ticker, 'Close': stock_close, 'Type': d['Type']
+                })
+
+        datewise_rows = []
+        for date_str in sorted(datewise.keys(), reverse=True):
+            info = datewise[date_str]
+            datewise_rows.append({
+                'Date': date_str,
+                'Nifty Close': nifty_close_map.get(date_str, None),
+                '# Bullish OBV': info['bullish'],
+                '# Bearish OBV': info['bearish'],
+                'Total Divergences': info['bullish'] + info['bearish'],
+            })
+
+        st.session_state.datewise_summary = datewise_rows
+        st.session_state.datewise_detail = datewise
+
 # -------------------------------------------------
 # Results Display
 # -------------------------------------------------
@@ -1278,7 +1323,31 @@ if st.session_state.get("scan_results"):
     for col in ["Symbol", "Name", "Signal", "Type", "From", "To"]:
         if col in summary_df.columns:
             summary_df[col] = summary_df[col].fillna("").astype(str)
-    st.dataframe(summary_df, width='stretch')
+    st.dataframe(summary_df, use_container_width=True)
+
+    # --- CSV Download for Scan Results ---
+    scan_csv = summary_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Download Scan Results as CSV",
+        data=scan_csv,
+        file_name="obv_scan_results.csv",
+        mime="text/csv",
+    )
+
+    # --- Date-wise Divergence Summary ---
+    if st.session_state.get("datewise_summary"):
+        st.subheader("📅 Date-wise Divergence Summary")
+        datewise_df = pd.DataFrame(st.session_state["datewise_summary"])
+        datewise_df['Nifty Close'] = pd.to_numeric(datewise_df['Nifty Close'], errors='coerce')
+        st.dataframe(datewise_df, use_container_width=True)
+
+        datewise_csv = datewise_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Date-wise Summary as CSV",
+            data=datewise_csv,
+            file_name="obv_datewise_summary.csv",
+            mime="text/csv",
+        )
 
     if st.button("✨ Generate AI Summary"):
         if not groq_api_key:
