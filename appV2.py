@@ -1323,7 +1323,11 @@ if st.session_state.get("scan_results"):
     for col in ["Symbol", "Name", "Signal", "Type", "From", "To"]:
         if col in summary_df.columns:
             summary_df[col] = summary_df[col].fillna("").astype(str)
-    st.dataframe(summary_df, use_container_width=True)
+    st.caption("👆 Click on a row to view that stock's chart below")
+    event = st.dataframe(
+        summary_df, use_container_width=True,
+        on_select="rerun", selection_mode="single-rows",
+    )
 
     # --- CSV Download for Scan Results ---
     scan_csv = summary_df.to_csv(index=False).encode('utf-8')
@@ -1333,6 +1337,30 @@ if st.session_state.get("scan_results"):
         file_name="obv_scan_results.csv",
         mime="text/csv",
     )
+
+    # --- Auto-show chart for selected row ---
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        row_idx = selected_rows[0]
+        selected_symbol = summary_df.iloc[row_idx]["Symbol"]
+        results_map = st.session_state.get("results_map", {})
+        if selected_symbol in results_map:
+            df, divs, ph, pl = results_map[selected_symbol]
+
+            st.markdown("---")
+            selected_row = summary_df[summary_df["Symbol"] == selected_symbol]
+            if not selected_row.empty and "Probability (%)" in summary_df.columns:
+                prob_val = selected_row["Probability (%)"].values[0]
+                if prob_val is not None and not pd.isna(prob_val):
+                    st.metric("ML Success Probability", f"{prob_val}%")
+
+            st.subheader(f"{selected_symbol} Chart")
+            if chart_style == "Static (Matplotlib)":
+                plot_static_matplotlib(df, divs, ph, pl, selected_symbol, vol_method, vol_window)
+            elif chart_style == "Interactive (Plotly)":
+                plot_interactive_plotly(df, divs, selected_symbol, vol_method, vol_window)
+            else:  # ECharts (True Sync Tooltip)
+                plot_echarts_synchronized(df, divs, selected_symbol, vol_method, vol_window)
 
     # --- Date-wise Divergence Summary ---
     if st.session_state.get("datewise_summary"):
@@ -1359,25 +1387,3 @@ if st.session_state.get("scan_results"):
                     st.markdown(get_ai_summary(groq_api_key, summary_rows))
                 except Exception as e:
                     st.error(f"Error: {e}")
-
-    st.subheader("Interactive Stock Viewer")
-    stock_options = [r["Symbol"] for r in summary_rows]
-    if stock_options:
-        selected_symbol = st.selectbox("Select a Stock", stock_options)
-        results_map = st.session_state.get("results_map", {})
-        if selected_symbol in results_map:
-            df, divs, ph, pl = results_map[selected_symbol]
-
-            selected_row = summary_df[summary_df["Symbol"] == selected_symbol]
-            if not selected_row.empty and "Probability (%)" in summary_df.columns:
-                prob_val = selected_row["Probability (%)"].values[0]
-                if prob_val is not None and not pd.isna(prob_val):
-                    st.metric("ML Success Probability", f"{prob_val}%")
-
-            st.subheader(f"{selected_symbol} Chart")
-            if chart_style == "Static (Matplotlib)":
-                plot_static_matplotlib(df, divs, ph, pl, selected_symbol, vol_method, vol_window)
-            elif chart_style == "Interactive (Plotly)":
-                plot_interactive_plotly(df, divs, selected_symbol, vol_method, vol_window)
-            else:  # ECharts (True Sync Tooltip)
-                plot_echarts_synchronized(df, divs, selected_symbol, vol_method, vol_window)
